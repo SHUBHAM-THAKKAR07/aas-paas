@@ -9,6 +9,7 @@ export type User = {
   neighbourhood: string;
   location_radius: number;
   neighbour_score: number;
+  provider?: "email" | "google";
   created_at: string;
   updated_at: string;
 };
