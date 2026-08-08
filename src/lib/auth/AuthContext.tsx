@@ -1,9 +1,9 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
 import { User } from "../db/types";
 import { db } from "../db/local-db";
-import { supabase } from "../supabase";
+import { createClient } from "@/lib/supabase/client";
 
 interface AuthContextType {
   user: User | null;
@@ -17,14 +17,21 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const LOCAL_USER_ID_KEY = "aas_paas_user_id";
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const [supabase] = useState(() => createClient());
+  // Guards against setState after unmount (e.g. slow IndexedDB reads).
+  const mountedRef = useRef(true);
 
   /**
    * Upsert a Google-authenticated user into the local database.
-   * Creates a new user if one doesn't exist, or updates existing record.
+   * Creates a new user if one doesn't exist, or updates the existing record.
+   * Supabase is the auth source of truth; the local DB only stores the
+   * Aas-Paas profile for that authenticated identity.
    */
   const upsertGoogleUser = useCallback(
     async (supabaseUser: {
@@ -42,69 +49,89 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         (supabaseUser.user_metadata?.picture as string) ||
         "";
 
-      // Check if user already exists in local DB by email
       const existing = await db.getUserByEmail(email);
 
+      let localUser: User | null = null;
+
       if (existing) {
-        // Update existing user with latest Google profile data
-        const updated = await db.updateUser(existing.id, {
+        localUser = await db.updateUser(existing.id, {
           full_name: fullName || existing.full_name,
           avatar_url: avatarUrl || existing.avatar_url,
           provider: "google",
         });
-        if (updated) {
-          localStorage.setItem("aas_paas_user_id", updated.id);
-          setUser(updated);
-        }
-        return;
+      } else {
+        localUser = await db.createUser({
+          email,
+          full_name: fullName,
+          avatar_url: avatarUrl,
+          bio: "",
+          neighbourhood: "",
+          location_radius: 5,
+          neighbour_score: 50,
+          provider: "google",
+        });
       }
 
-      // Create new user from Google profile
-      const newUser = await db.createUser({
-        email,
-        full_name: fullName,
-        avatar_url: avatarUrl,
-        bio: "",
-        neighbourhood: "",
-        location_radius: 5,
-        neighbour_score: 50,
-        provider: "google",
-      });
-      localStorage.setItem("aas_paas_user_id", newUser.id);
-      setUser(newUser);
+      if (localUser && mountedRef.current) {
+        localStorage.setItem(LOCAL_USER_ID_KEY, localUser.id);
+        setUser(localUser);
+      }
     },
     []
   );
 
+  const clearLocalSession = useCallback(() => {
+    localStorage.removeItem(LOCAL_USER_ID_KEY);
+    if (mountedRef.current) setUser(null);
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // Initial session restore — Supabase session takes priority, local DB is the
+  // fallback for email/demo accounts that have no Supabase session.
   useEffect(() => {
     const initAuth = async () => {
-      // 1. Restore session from localStorage (existing flow)
-      const storedUserId = localStorage.getItem("aas_paas_user_id");
-      if (storedUserId) {
-        const u = await db.getUser(storedUserId);
-        if (u) {
-          setUser(u);
-        } else {
-          localStorage.removeItem("aas_paas_user_id");
-        }
-      }
+      let supabaseUserId: string | null = null;
 
-      // 2. Check for active Supabase session (Google OAuth return)
       if (supabase) {
         const {
           data: { session },
         } = await supabase.auth.getSession();
         if (session?.user) {
+          supabaseUserId = session.user.id;
           await upsertGoogleUser(session.user);
         }
       }
 
-      setLoading(false);
+      if (!mountedRef.current) return;
+
+      // No Supabase session → restore the previously stored local user
+      // (email or demo login). Re-assert it only when it differs, so a Google
+      // upsert above is never overwritten by a stale local record.
+      if (!supabaseUserId) {
+        const storedUserId = localStorage.getItem(LOCAL_USER_ID_KEY);
+        if (storedUserId) {
+          const u = await db.getUser(storedUserId);
+          if (u) {
+            if (mountedRef.current) setUser(u);
+          } else {
+            localStorage.removeItem(LOCAL_USER_ID_KEY);
+          }
+        }
+      }
+
+      if (mountedRef.current) setLoading(false);
     };
     initAuth();
-  }, [upsertGoogleUser]);
+  }, [supabase, upsertGoogleUser]);
 
-  // Listen for Supabase auth state changes (handles post-OAuth redirect)
+  // Live auth events. INITIAL_SESSION fires when the client restores a session
+  // on load; SIGNED_IN fires on new logins (e.g. after the OAuth callback).
   useEffect(() => {
     if (!supabase) return;
 
@@ -114,23 +141,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (event === "SIGNED_IN" && session?.user) {
         await upsertGoogleUser(session.user);
       }
+      if (event === "INITIAL_SESSION" && session?.user) {
+        // Sync the local profile with the restored session. Idempotent.
+        await upsertGoogleUser(session.user);
+      }
       if (event === "SIGNED_OUT") {
-        localStorage.removeItem("aas_paas_user_id");
-        setUser(null);
+        clearLocalSession();
       }
     });
 
     return () => {
       subscription.unsubscribe();
     };
-  }, [upsertGoogleUser]);
+  }, [supabase, upsertGoogleUser, clearLocalSession]);
 
   const login = async (email: string) => {
     const u = await db.getUserByEmail(email);
     if (!u) {
       return { error: "User not found. Please sign up." };
     }
-    localStorage.setItem("aas_paas_user_id", u.id);
+    localStorage.setItem(LOCAL_USER_ID_KEY, u.id);
     setUser(u);
     return {};
   };
@@ -149,7 +179,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       location_radius: 5,
       neighbour_score: 50,
     });
-    localStorage.setItem("aas_paas_user_id", newUser.id);
+    localStorage.setItem(LOCAL_USER_ID_KEY, newUser.id);
     setUser(newUser);
     return {};
   };
@@ -167,7 +197,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
+          redirectTo: `${window.location.origin}/auth/callback?next=/home`,
         },
       });
 
@@ -176,7 +206,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return { error: error.message };
       }
 
-      // The browser will redirect — isGoogleLoading stays true until then
+      // The browser will redirect — isGoogleLoading stays true until then.
       return {};
     } catch (err: unknown) {
       setIsGoogleLoading(false);
@@ -190,13 +220,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = () => {
-    localStorage.removeItem("aas_paas_user_id");
-    setUser(null);
+    clearLocalSession();
 
-    // Also sign out of Supabase if available
+    // Also sign out of Supabase if available.
     if (supabase) {
       supabase.auth.signOut().catch(() => {
-        // Silent failure — local logout already succeeded
+        // Silent failure — local logout already succeeded.
       });
     }
   };
@@ -217,4 +246,3 @@ export function useAuth() {
   }
   return context;
 }
-

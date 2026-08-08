@@ -1,56 +1,86 @@
-import { NextRequest, NextResponse } from "next/server";
-import { createServerSupabaseClient } from "@/lib/supabase-server";
+import { NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
 
 /**
  * GET /auth/callback
  *
- * Handles the OAuth redirect from Supabase after Google sign-in.
- * Exchanges the authorization code for a session, then redirects
- * the user to the app.
+ * OAuth (PKCE) redirect target. After the user completes Google sign-in,
+ * Supabase appends `?code=...` (PKCE) — never `#access_token=...` — to this
+ * URL. This route:
+ *   1. Reads the authorization code
+ *   2. Exchanges it for a session (stored in Supabase auth cookies)
+ *   3. Verifies the authenticated user via `getUser()`
+ *   4. Redirects to an internal `next` path (default `/home`)
+ *
+ * Tokens are never exposed in the visible URL.
  */
-export async function GET(request: NextRequest) {
-  const { searchParams, origin } = new URL(request.url);
-  const code = searchParams.get("code");
-  const error = searchParams.get("error");
-  const errorDescription = searchParams.get("error_description");
 
-  // Handle OAuth errors from the provider
+const DEFAULT_NEXT_PATH = '/home'
+
+/**
+ * Restrict `next` to internal, relative paths only to prevent open redirects.
+ * Anything else (absolute URLs, protocol-relative, backslash tricks) falls back
+ * to `/home`.
+ */
+function safeNextPath(next: string | null): string {
+  if (
+    next &&
+    next.startsWith('/') &&
+    !next.startsWith('//') &&
+    !next.includes('://') &&
+    !next.includes('\\')
+  ) {
+    return next
+  }
+  return DEFAULT_NEXT_PATH
+}
+
+export async function GET(request: Request) {
+  const { searchParams, origin } = new URL(request.url)
+  const code = searchParams.get('code')
+  const error = searchParams.get('error')
+  const errorDescription = searchParams.get('error_description')
+  const next = safeNextPath(searchParams.get('next'))
+
+  // Redirect back to the origin the user authenticated from. On Vercel (direct
+  // deployment, no load balancer) `request.url` is already the public URL, so
+  // `origin` is authoritative — never trust a client-supplied x-forwarded-host.
+  const redirectWithError = (message: string) =>
+    NextResponse.redirect(`${origin}/login?error=${encodeURIComponent(message)}`)
+
+  // OAuth provider reported a failure (e.g. user cancelled at Google).
   if (error) {
-    const message = encodeURIComponent(
-      errorDescription || "Authentication failed. Please try again."
-    );
-    return NextResponse.redirect(
-      new URL(`/login?error=${message}`, origin)
-    );
+    return redirectWithError(errorDescription || 'Authentication failed. Please try again.')
   }
 
-  // No code present — invalid callback
+  // PKCE always delivers ?code= — anything else is an invalid callback.
+  // (Implicit-flow callbacks arrive with #access_token= in the fragment, which
+  // never reaches the server; this is exactly the broken flow we replaced.)
   if (!code) {
-    return NextResponse.redirect(
-      new URL("/login?error=Missing%20authorization%20code", origin)
-    );
+    return redirectWithError('Invalid authentication callback. Please try again.')
   }
 
   try {
-    const supabase = await createServerSupabaseClient();
-    const { error: exchangeError } =
-      await supabase.auth.exchangeCodeForSession(code);
+    const supabase = await createClient()
+
+    const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code)
 
     if (exchangeError) {
-      const message = encodeURIComponent(exchangeError.message);
-      return NextResponse.redirect(
-        new URL(`/login?error=${message}`, origin)
-      );
+      return redirectWithError(exchangeError.message || 'Sign-in failed. Please try again.')
     }
 
-    // Session established — redirect to app
-    return NextResponse.redirect(new URL("/home", origin));
+    // Verify the session actually exists before redirecting.
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser()
+
+    if (userError || !user) {
+      return redirectWithError('Authentication failed. Please try again.')
+    }
+
+    return NextResponse.redirect(`${origin}${next}`)
   } catch {
-    return NextResponse.redirect(
-      new URL(
-        "/login?error=Something%20went%20wrong%20during%20authentication",
-        origin
-      )
-    );
+    return redirectWithError('Something went wrong during authentication. Please try again.')
   }
 }
