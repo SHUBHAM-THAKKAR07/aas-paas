@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import Link from "next/link";
 import { Star, ShieldCheck, Mail, CheckCircle } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -30,30 +31,33 @@ export function HelpProfileCard({ profile }: HelpProfileCardProps) {
       <Card hoverable className="p-6 overflow-hidden flex flex-col justify-between h-full">
         <div className="space-y-4">
           <div className="flex items-start justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container font-bold flex items-center justify-center text-lg shrink-0 overflow-hidden border border-secondary-container">
-                {profile.user?.avatar_url ? (
-                  <img
-                    src={profile.user.avatar_url}
-                    alt={helperName}
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  helperName.charAt(0).toUpperCase()
+          <Link
+            href={`/profile/${profile.user.id}`}
+            className="flex items-center gap-3 group min-w-0"
+          >
+            <div className="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container font-bold flex items-center justify-center text-lg shrink-0 overflow-hidden border border-secondary-container">
+              {profile.user?.avatar_url ? (
+                <img
+                  src={profile.user.avatar_url}
+                  alt={helperName}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                helperName.charAt(0).toUpperCase()
+              )}
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <h3 className="label-md font-bold text-on-surface group-hover:text-secondary transition-colors">{helperName}</h3>
+                {(profile.is_verified ?? true) && (
+                  <ShieldCheck size={16} className="text-secondary" aria-label="Verified Helper" />
                 )}
               </div>
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <h3 className="label-md font-bold text-on-surface">{helperName}</h3>
-                  {(profile.is_verified ?? true) && (
-                    <ShieldCheck size={16} className="text-secondary" aria-label="Verified Helper" />
-                  )}
-                </div>
-                <Badge variant="help" className="mt-1">
-                  {profile.category}
-                </Badge>
-              </div>
+              <Badge variant="help" className="mt-1">
+                {profile.category}
+              </Badge>
             </div>
+          </Link>
 
             <div className="flex items-center gap-1 bg-tertiary-fixed/40 px-2.5 py-1 rounded-full text-on-tertiary-fixed-variant label-sm font-bold border border-tertiary-fixed/60 shrink-0">
               <Star size={13} className="fill-tertiary text-tertiary" />

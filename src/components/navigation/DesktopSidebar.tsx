@@ -5,8 +5,10 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils/cn";
 import { mainNavItems } from "@/config/navigation";
 import { useAuth } from "@/lib/auth/AuthContext";
+import { useUnreadCounts } from "@/features/messaging/hooks";
+import { CountBadge } from "@/components/ui/count-badge";
 import {
-  Home, MapPin, Plus, HandHeart, User as UserIcon, Bell, AlertCircle, Settings, Sparkles, LogOut,
+  Home, MapPin, Plus, HandHeart, User as UserIcon, Bell, AlertCircle, Settings, Sparkles, LogOut, MessageSquare,
   type LucideIcon,
 } from "lucide-react";
 
@@ -19,13 +21,21 @@ const iconMap: Record<string, LucideIcon> = {
   Bell,
   AlertCircle,
   Settings,
+  MessageSquare,
 };
 
 export function DesktopSidebar() {
   const pathname = usePathname();
   const { user, logout } = useAuth();
+  const { messages: unreadMessages, notifications: unreadNotifications } = useUnreadCounts();
 
   const sidebarItems = mainNavItems.filter((item) => !item.mobileOnly);
+
+  const unreadFor = (href: string): number => {
+    if (href === "/messages") return unreadMessages;
+    if (href === "/notifications") return unreadNotifications;
+    return 0;
+  };
 
   return (
     <aside
@@ -85,7 +95,8 @@ export function DesktopSidebar() {
                   aria-hidden="true"
                 />
               )}
-              <span>{item.label}</span>
+              <span className="flex-1 truncate">{item.label}</span>
+              <CountBadge count={unreadFor(item.href)} />
             </Link>
           );
         })}

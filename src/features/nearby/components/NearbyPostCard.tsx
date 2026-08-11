@@ -6,6 +6,41 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import type { NearbyPostWithUser } from "@/lib/db/types";
 
+interface AuthorBlockProps {
+  avatar: string;
+  name: string;
+  createdAt: string;
+  hoverClass?: string;
+}
+
+function AuthorBlock({ avatar, name, createdAt, hoverClass }: AuthorBlockProps) {
+  return (
+    <>
+      <div className="w-11 h-11 rounded-full bg-secondary-container text-on-secondary-container font-bold flex items-center justify-center text-base shrink-0 overflow-hidden border border-outline-variant/40">
+        {avatar ? (
+          <img src={avatar} alt={name} className="w-full h-full object-cover" />
+        ) : (
+          name.charAt(0).toUpperCase()
+        )}
+      </div>
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <span className={`label-md font-bold text-on-surface ${hoverClass || ""} transition-colors`}>
+            {name}
+          </span>
+          <span className="label-sm text-on-surface-variant/70 shrink-0">
+            · {formatDistanceToNow(new Date(createdAt), { addSuffix: true })}
+          </span>
+        </div>
+        <div className="flex items-center gap-1 mt-0.5 label-sm text-on-surface-variant">
+          <MapPin size={12} className="text-secondary" />
+          <span>Indiranagar · 300m away</span>
+        </div>
+      </div>
+    </>
+  );
+}
+
 interface NearbyPostCardProps {
   post: NearbyPostWithUser;
 }
@@ -24,29 +59,27 @@ export function NearbyPostCard({ post }: NearbyPostCardProps) {
   return (
     <Card hoverable className="p-6 overflow-hidden">
       <div className="flex items-start justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-11 h-11 rounded-full bg-secondary-container text-on-secondary-container font-bold flex items-center justify-center text-base shrink-0 overflow-hidden border border-outline-variant/40">
-            {post.user?.avatar_url ? (
-              <img src={post.user.avatar_url} alt={authorName} className="w-full h-full object-cover" />
-            ) : (
-              authorName.charAt(0).toUpperCase()
-            )}
+        {post.user ? (
+          <Link
+            href={`/profile/${post.user.id}`}
+            className="flex items-center gap-3 group min-w-0"
+          >
+            <AuthorBlock
+              avatar={post.user.avatar_url}
+              name={authorName}
+              createdAt={post.created_at}
+              hoverClass="group-hover:text-primary"
+            />
+          </Link>
+        ) : (
+          <div className="flex items-center gap-3 min-w-0">
+            <AuthorBlock
+              avatar=""
+              name={authorName}
+              createdAt={post.created_at}
+            />
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="label-md font-bold text-on-surface">
-                {authorName}
-              </span>
-              <span className="label-sm text-on-surface-variant/70">
-                · {formatDistanceToNow(new Date(post.created_at), { addSuffix: true })}
-              </span>
-            </div>
-            <div className="flex items-center gap-1 mt-0.5 label-sm text-on-surface-variant">
-              <MapPin size={12} className="text-secondary" />
-              <span>Indiranagar · 300m away</span>
-            </div>
-          </div>
-        </div>
+        )}
 
         <Badge variant="nearby" className="shrink-0">
           {post.category}

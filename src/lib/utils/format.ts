@@ -29,3 +29,23 @@ export function maskPhone(phone: string): string {
   if (phone.length < 6) return phone;
   return phone.slice(0, 3) + "****" + phone.slice(-3);
 }
+
+/** Format a timestamp as a short clock time, e.g. "9:41 AM" */
+export function formatClockTime(date: string | Date): string {
+  return format(new Date(date), "h:mm a");
+}
+
+/**
+ * Format a timestamp for conversation lists:
+ * today → clock time, this week → weekday, otherwise a short date.
+ */
+export function formatConversationTime(date: string | Date): string {
+  const d = new Date(date);
+  const now = new Date();
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const daysDiff = Math.round((startOfDay(now) - startOfDay(d)) / 86400000);
+  if (daysDiff <= 0) return format(d, "h:mm a");
+  if (daysDiff === 1) return "Yesterday";
+  if (daysDiff < 7) return format(d, "EEEE");
+  return format(d, "d MMM");
+}

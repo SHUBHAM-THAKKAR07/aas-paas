@@ -131,6 +131,12 @@ export type NotificationType =
   | "post_help"
   | "post_need"
   | "reply"
+  | "comment"
+  | "reaction"
+  | "message"
+  | "mention"
+  | "group_invite"
+  | "group"
   | "trust_update"
   | "moderation"
   | "system";

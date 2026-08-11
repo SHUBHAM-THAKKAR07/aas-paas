@@ -54,7 +54,8 @@ function LoginContent() {
   useEffect(() => {
     const callbackError = searchParams.get("error");
     if (callbackError) {
-      setError(decodeURIComponent(callbackError));
+      const message = decodeURIComponent(callbackError);
+      queueMicrotask(() => setError(message));
     }
   }, [searchParams]);
 
@@ -196,7 +197,7 @@ function LoginContent() {
 
         <div className="pt-4 border-t border-outline-variant/20 text-center">
           <p className="body-md text-on-surface-variant">
-            Don't have an account?{" "}
+            Don&apos;t have an account?{" "}
             <Link href="/signup" className="text-primary font-bold hover:underline">
               Join Aas-Paas
             </Link>

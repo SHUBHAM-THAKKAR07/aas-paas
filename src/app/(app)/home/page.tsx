@@ -4,13 +4,16 @@ import React, { useState } from "react";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { NearbyFeed } from "@/features/nearby/components/NearbyFeed";
-import { Search, MapPin, Plus, HeartHandshake, AlertCircle, SlidersHorizontal } from "lucide-react";
+import { useUnreadCounts } from "@/features/messaging/hooks";
+import { CountBadge } from "@/components/ui/count-badge";
+import { Search, MapPin, Plus, HeartHandshake, AlertCircle, SlidersHorizontal, MessageSquare, Bell } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export default function HomePage() {
   const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState("");
   const [activeFilter, setActiveFilter] = useState<"all" | "nearby" | "help" | "need">("all");
+  const { messages: unreadMessages, notifications: unreadNotifications } = useUnreadCounts();
 
   const userName = user?.full_name ? user.full_name.split(" ")[0] : "Neighbour";
 
@@ -28,7 +31,7 @@ export default function HomePage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
           <div className="relative flex-1 md:w-64">
             <input
               type="text"
@@ -39,6 +42,25 @@ export default function HomePage() {
             />
             <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" />
           </div>
+
+          {/* Mobile access to messages & notifications (desktop uses the sidebar) */}
+          <Link
+            href="/messages"
+            aria-label={`Messages${unreadMessages > 0 ? `, ${unreadMessages} unread` : ""}`}
+            className="relative lg:hidden w-10 h-10 rounded-2xl bg-surface-container-lowest border border-outline-variant/30 flex items-center justify-center text-on-surface-variant hover:text-primary hover:border-primary transition-all shrink-0"
+          >
+            <MessageSquare size={18} />
+            <CountBadge count={unreadMessages} className="absolute -top-1.5 -right-1.5" />
+          </Link>
+          <Link
+            href="/notifications"
+            aria-label={`Notifications${unreadNotifications > 0 ? `, ${unreadNotifications} unread` : ""}`}
+            className="relative lg:hidden w-10 h-10 rounded-2xl bg-surface-container-lowest border border-outline-variant/30 flex items-center justify-center text-on-surface-variant hover:text-primary hover:border-primary transition-all shrink-0"
+          >
+            <Bell size={18} />
+            <CountBadge count={unreadNotifications} className="absolute -top-1.5 -right-1.5" />
+          </Link>
+
           <Link href="/create">
             <Button variant="primary" size="md" className="shrink-0 hover-lift shadow-sm">
               <Plus size={18} />

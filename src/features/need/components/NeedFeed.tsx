@@ -20,9 +20,14 @@ export function NeedFeed() {
   }, []);
 
   useEffect(() => {
-    fetchRequests();
-    
-    const handleDbChange = () => fetchRequests();
+    // Initial load — setState happens inside the promise callback, never
+    // synchronously in the effect body.
+    void db.getHelpRequests().then((data) => {
+      setRequests(data);
+      setLoading(false);
+    });
+
+    const handleDbChange = () => void fetchRequests();
     window.addEventListener("local-db-changed", handleDbChange);
     return () => window.removeEventListener("local-db-changed", handleDbChange);
   }, [fetchRequests]);

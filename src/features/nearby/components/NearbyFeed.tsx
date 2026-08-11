@@ -27,9 +27,14 @@ export function NearbyFeed({ filter = "all", searchQuery = "" }: NearbyFeedProps
   }, []);
 
   useEffect(() => {
-    fetchPosts();
-    
-    const handleDbChange = () => fetchPosts();
+    // Initial load — setState happens inside the promise callback, never
+    // synchronously in the effect body.
+    void db.getNearbyPosts().then((data) => {
+      setPosts(data);
+      setLoading(false);
+    });
+
+    const handleDbChange = () => void fetchPosts();
     window.addEventListener("local-db-changed", handleDbChange);
     return () => window.removeEventListener("local-db-changed", handleDbChange);
   }, [fetchPosts]);

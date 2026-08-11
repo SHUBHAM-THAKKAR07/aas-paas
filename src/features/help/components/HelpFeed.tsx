@@ -20,9 +20,14 @@ export function HelpFeed() {
   }, []);
 
   useEffect(() => {
-    fetchProfiles();
-    
-    const handleDbChange = () => fetchProfiles();
+    // Initial load — setState happens inside the promise callback, never
+    // synchronously in the effect body.
+    void db.getHelpProfiles().then((data) => {
+      setProfiles(data);
+      setLoading(false);
+    });
+
+    const handleDbChange = () => void fetchProfiles();
     window.addEventListener("local-db-changed", handleDbChange);
     return () => window.removeEventListener("local-db-changed", handleDbChange);
   }, [fetchProfiles]);

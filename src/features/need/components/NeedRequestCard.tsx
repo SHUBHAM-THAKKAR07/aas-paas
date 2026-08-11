@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 import { MapPin, Heart, CheckCircle2, Clock } from "lucide-react";
 import { Card } from "@/components/ui/card";
@@ -31,7 +32,10 @@ export function NeedRequestCard({ request }: NeedRequestCardProps) {
     <>
       <Card hoverable className={`p-6 overflow-hidden ${isResolved ? "opacity-80 bg-surface-container" : ""}`}>
         <div className="flex items-start justify-between">
-          <div className="flex items-center gap-3">
+          <Link
+            href={`/profile/${request.user.id}`}
+            className="flex items-center gap-3 group min-w-0"
+          >
             <div className="w-11 h-11 rounded-full bg-tertiary-fixed text-on-tertiary-fixed font-bold flex items-center justify-center text-base shrink-0 overflow-hidden border border-tertiary-fixed">
               {request.user?.avatar_url ? (
                 <img
@@ -43,10 +47,10 @@ export function NeedRequestCard({ request }: NeedRequestCardProps) {
                 requesterName.charAt(0).toUpperCase()
               )}
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <span className="label-md font-bold text-on-surface">{requesterName}</span>
-                <span className="label-sm text-on-surface-variant/70">
+                <span className="label-md font-bold text-on-surface group-hover:text-tertiary transition-colors">{requesterName}</span>
+                <span className="label-sm text-on-surface-variant/70 shrink-0">
                   · {formatDistanceToNow(new Date(request.created_at), { addSuffix: true })}
                 </span>
               </div>
@@ -55,7 +59,7 @@ export function NeedRequestCard({ request }: NeedRequestCardProps) {
                 <span>Sector 15 · 400m away</span>
               </div>
             </div>
-          </div>
+          </Link>
 
           <Badge variant={isResolved ? "default" : "need"}>
             {isResolved ? "Resolved" : request.category || "Need It Now"}

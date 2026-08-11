@@ -5,8 +5,8 @@
  *   Home | Help | [+Create] | Need | Profile
  *
  * Desktop/tablet (left sidebar):
- *   Home, Nearby, Verified Help, Need It Now, Settings
- *   + New Post action at top
+ *   Home, Nearby, Verified Help, Need It Now, Messages,
+ *   Notifications, Settings + New Post action at top
  */
 
 export interface NavItem {
@@ -41,6 +41,12 @@ export const mainNavItems: NavItem[] = [
     label: "Need It Now",
     href: "/need",
     icon: "AlertCircle",
+  },
+  {
+    label: "Messages",
+    href: "/messages",
+    icon: "MessageSquare",
+    desktopOnly: true,
   },
   {
     label: "Notifications",

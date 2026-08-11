@@ -48,6 +48,85 @@ export type HelpRequest = {
   updated_at: string;
 };
 
+// ============================================================
+// MESSAGING
+// ============================================================
+
+export type ConversationType = "direct" | "group";
+
+export type MemberRole = "owner" | "admin" | "member";
+
+export type Conversation = {
+  id: string;
+  type: ConversationType;
+  /** Group display name. Null for direct conversations. */
+  name: string | null;
+  /** Group image URL. Null for direct conversations. */
+  avatar_url: string | null;
+  created_by: string;
+  created_at: string;
+  /** Last activity (message sent / member changed) — used for sorting. */
+  updated_at: string;
+};
+
+export type ConversationMember = {
+  id: string;
+  conversation_id: string;
+  user_id: string;
+  role: MemberRole;
+  joined_at: string;
+};
+
+export type Message = {
+  id: string;
+  conversation_id: string;
+  sender_id: string;
+  content: string;
+  created_at: string;
+};
+
+export type MessageRead = {
+  id: string;
+  conversation_id: string;
+  user_id: string;
+  last_read_at: string;
+};
+
+/** Conversation + everything the conversation list needs to render. */
+export type ConversationSummary = {
+  conversation: Conversation;
+  /** Other participant's name (direct) or group name. */
+  displayName: string;
+  /** Other participant's avatar (direct) or group image. */
+  avatarUrl: string | null;
+  lastMessage: Message | null;
+  lastSenderName: string | null;
+  unreadCount: number;
+  memberCount: number;
+};
+
+// Joined types for UI
+export type ConversationMemberWithUser = ConversationMember & { user: User };
+export type MessageWithSender = Message & { sender: User };
+
+// ============================================================
+// NOTIFICATIONS
+// ============================================================
+
+export type AppNotification = {
+  id: string;
+  user_id: string;
+  /** The user who triggered the notification (null for system events). */
+  actor_id: string | null;
+  type: string;
+  content: string;
+  related_link: string | null;
+  is_read: boolean;
+  created_at: string;
+};
+
+export type NotificationWithActor = AppNotification & { actor: User | null };
+
 // Joined types for UI
 export type NearbyPostWithUser = NearbyPost & { user: User };
 export type HelpProfileWithUser = HelpProfile & { user: User };

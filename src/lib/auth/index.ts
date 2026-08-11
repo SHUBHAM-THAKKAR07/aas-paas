@@ -19,6 +19,7 @@ export const PROTECTED_ROUTES = [
   "/need",
   "/create",
   "/profile",
+  "/messages",
   "/notifications",
   "/settings",
   "/onboarding",
