@@ -6,10 +6,16 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,
+  // Next.js dev compiles routes on demand; parallel cold starts need headroom.
+  timeout: 60_000,
   reporter: "html",
   use: {
     baseURL: "http://localhost:3000",
     trace: "on-first-retry",
+  },
+  // Next.js dev compiles routes on demand; give navigation assertions room.
+  expect: {
+    timeout: 15_000,
   },
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },

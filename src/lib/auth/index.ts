@@ -29,9 +29,11 @@ export const PROTECTED_ROUTES = [
  * Routes that should redirect authenticated users away (e.g. login page).
  */
 export const AUTH_ROUTES = [
-  "/auth/phone",
-  "/auth/verify",
-  "/auth/signup",
+  "/login",
+  "/signup",
+  "/forgot-password",
+  "/reset-password",
+  "/verify-email",
 ] as const;
 
 export type ProtectedRoute = (typeof PROTECTED_ROUTES)[number];

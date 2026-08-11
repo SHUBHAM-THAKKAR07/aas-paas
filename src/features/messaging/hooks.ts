@@ -13,7 +13,7 @@ import { db } from "@/lib/db/local-db";
 import { useDbSync } from "@/lib/db/use-db-sync";
 import type {
   ConversationSummary,
-  MessageWithSender,
+  MessageWithReply,
   ConversationMemberWithUser,
 } from "@/lib/db/types";
 
@@ -62,8 +62,10 @@ export function useConversation(conversationId: string | null) {
   const [data, setData] = useState<{
     conversation: NonNullable<Awaited<ReturnType<typeof db.getConversation>>>;
     members: ConversationMemberWithUser[];
-    messages: MessageWithSender[];
+    messages: MessageWithReply[];
     myRole: "owner" | "admin" | "member" | null;
+    muted: boolean;
+    archived: boolean;
   } | null>(null);
 
   useDbSync(
@@ -72,17 +74,19 @@ export function useConversation(conversationId: string | null) {
         setData(null);
         return;
       }
-      const [conversation, members, messages] = await Promise.all([
+      const [conversation, members, messages, muted, archived] = await Promise.all([
         db.getConversation(conversationId),
         db.getConversationMembers(conversationId),
-        db.getMessages(conversationId),
+        db.getMessagesWithReplies(conversationId),
+        db.isConversationMuted(conversationId, user.id),
+        db.isConversationArchived(conversationId, user.id),
       ]);
       if (!conversation) {
         setData(null);
         return;
       }
       const myRole = members.find((m) => m.user_id === user.id)?.role ?? null;
-      setData({ conversation, members, messages, myRole });
+      setData({ conversation, members, messages, myRole, muted, archived });
     }, [conversationId, user]),
     [conversationId, user?.id]
   );

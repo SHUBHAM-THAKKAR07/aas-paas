@@ -1,10 +1,12 @@
 import { DesktopSidebar } from "@/components/navigation/DesktopSidebar";
 import { MobileBottomBar } from "@/components/navigation/MobileBottomBar";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
+import { PresenceHeartbeat } from "@/components/auth/PresenceHeartbeat";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <ProtectedRoute>
+      <PresenceHeartbeat />
       <div className="min-h-screen bg-surface flex">
         <DesktopSidebar />
 

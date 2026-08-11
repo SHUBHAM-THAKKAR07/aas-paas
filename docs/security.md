@@ -7,7 +7,28 @@
 | `NEXT_PUBLIC_SUPABASE_URL` | Public (browser) | Safe to expose |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Public (browser) | Safe to expose — only permits RLS-allowed operations |
 | `SUPABASE_SERVICE_ROLE_KEY` | **SERVER ONLY** | **NEVER** expose to browser. Rotate immediately if leaked. |
+| `CRON_SECRET` | **SERVER ONLY** | Bearer token for the unverified-account cleanup cron |
+| `EMAIL_VALIDATION_API_KEY` | **SERVER ONLY** | Signup email validation provider key (optional) |
 | `GOOGLE_CLIENT_SECRET` | **SERVER ONLY** | Never expose |
+
+## Blocks & Reports
+
+- Users can block others from their profile; the local data layer and the production RLS policies both prevent messaging between blocked users (conversations are hidden from both sides)
+- Posts, users and messages can be reported from the UI; reports land in the moderation queue (`/admin/moderation` in production, the local reports store for the demo layer)
+
+## Email Verification
+
+- Email/password accounts must confirm their email before accessing protected areas
+- `ProtectedRoute` gates on the Supabase session's `email_confirmed_at` (Google OAuth sessions are treated as verified)
+- Unverified accounts older than 24 hours are removed by a scheduled server-side cleanup (`/api/cron/cleanup-unverified`, `CRON_SECRET`-guarded, idempotent, service-role only)
+- The `prevent_profile_privilege_escalation` trigger blocks users from changing their own role/status/verification flags
+
+## Admin Authorization
+
+- `/admin` renders nothing for non-admins — the route-group layout performs a **server-side** role check against the `profiles` table and redirects
+- Every admin API route re-verifies the session + role server-side via `requireRole()`
+- Role/status changes and moderation actions are written with the **service-role** client only and recorded in the immutable `audit_logs` table
+- `audit_logs` has no user-facing INSERT/UPDATE/DELETE policies; only server-side flows can write
 
 ## Service Role Key Protection
 
@@ -43,9 +64,11 @@ Policies enforce:
 ## Authorization Principles
 
 1. **Never trust browser-provided identity** for security decisions
-2. **Verify session server-side** on every protected request (via the middleware proxy)
+2. **Verify session server-side** on every protected request (via the middleware proxy + `getSessionRole()`)
 3. **Admin operations use the service role client** — never the anon client
 4. **RLS is the database-level enforcement** — application checks are secondary
+5. **RLS blocks messaging between blocked users** — the messages policies reject reads/writes when either party blocks the other
+6. **Notifications are recipient-scoped** — RLS only permits reading/updating one's own rows
 
 ## Free-MVP Security Notes
 

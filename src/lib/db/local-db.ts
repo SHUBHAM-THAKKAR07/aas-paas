@@ -11,8 +11,15 @@ import {
   ConversationSummary,
   ConversationMemberWithUser,
   MessageWithSender,
+  MessageWithReply,
   NotificationWithActor,
   MemberRole,
+  PostComment,
+  PostReaction,
+  Block,
+  Report,
+  PostCommentWithUser,
+  ReportTargetType,
 } from "./types";
 import {
   MOCK_USERS,
@@ -24,6 +31,8 @@ import {
   MOCK_MESSAGES,
   MOCK_MESSAGE_READS,
   MOCK_NOTIFICATIONS,
+  MOCK_COMMENTS,
+  MOCK_REACTIONS,
 } from "./mock-data";
 
 export const STORAGE_KEY = "aas_paas_local_db";
@@ -38,6 +47,10 @@ interface DatabaseSchema {
   messages: Message[];
   message_reads: MessageRead[];
   notifications: AppNotification[];
+  comments: PostComment[];
+  reactions: PostReaction[];
+  blocks: Block[];
+  reports: Report[];
 }
 
 class LocalDatabase {
@@ -98,6 +111,10 @@ class LocalDatabase {
       messages: MOCK_MESSAGES.map((m) => ({ ...m })),
       message_reads: MOCK_MESSAGE_READS.map((r) => ({ ...r })),
       notifications: MOCK_NOTIFICATIONS.map((n) => ({ ...n })),
+      comments: MOCK_COMMENTS.map((c) => ({ ...c })),
+      reactions: MOCK_REACTIONS.map((r) => ({ ...r })),
+      blocks: [],
+      reports: [],
     };
   }
 
@@ -203,14 +220,21 @@ class LocalDatabase {
     conversationId: string
   ): Promise<ConversationMemberWithUser[]> {
     const db = this.getDB();
-    return db.conversation_members
-      .filter((m) => m.conversation_id === conversationId)
-      .map((m) => {
-        const user = db.users.find((u) => u.id === m.user_id);
-        return user ? { ...m, user } : null;
-      })
-      .filter((x): x is ConversationMemberWithUser => x !== null)
-      .sort((a, b) => a.joined_at.localeCompare(b.joined_at));
+    const result: ConversationMemberWithUser[] = [];
+    for (const m of db.conversation_members) {
+      if (m.conversation_id !== conversationId) continue;
+      const user = db.users.find((u) => u.id === m.user_id);
+      if (!user) continue;
+      const read = db.message_reads.find(
+        (r) => r.conversation_id === conversationId && r.user_id === m.user_id
+      );
+      result.push({
+        ...m,
+        last_read_at: read?.last_read_at ?? m.last_read_at ?? null,
+        user,
+      });
+    }
+    return result.sort((a, b) => a.joined_at.localeCompare(b.joined_at));
   }
 
   public async getMemberRole(
@@ -228,6 +252,14 @@ class LocalDatabase {
   ): Promise<ConversationSummary[]> {
     const db = this.getDB();
     const memberships = db.conversation_members.filter((m) => m.user_id === userId);
+
+    // Drop conversations with anyone the user has blocked (either direction),
+    // so blocked people never appear in the list either.
+    const blockedIds = new Set(
+      db.blocks
+        .filter((b) => b.blocker_id === userId || b.blocked_id === userId)
+        .map((b) => (b.blocker_id === userId ? b.blocked_id : b.blocker_id))
+    );
 
     const summaries = memberships.map((membership) => {
       const conversation = db.conversations.find(
@@ -270,9 +302,29 @@ class LocalDatabase {
       };
     });
 
-    return summaries.sort((a, b) =>
-      b.conversation.updated_at.localeCompare(a.conversation.updated_at)
-    );
+    return summaries
+      .filter((s) => {
+        if (s.conversation.type === "direct") {
+          const otherId = db.conversation_members
+            .filter(
+              (m) =>
+                m.conversation_id === s.conversation.id && m.user_id !== userId
+            )
+            .map((m) => m.user_id)[0];
+          return !otherId || !blockedIds.has(otherId);
+        }
+        return true;
+      })
+      .map((s) => {
+        const myMembership = db.conversation_members.find(
+          (m) =>
+            m.conversation_id === s.conversation.id && m.user_id === userId
+        );
+        return { ...s, archived: Boolean(myMembership?.archived_at) };
+      })
+      .sort((a, b) =>
+        b.conversation.updated_at.localeCompare(a.conversation.updated_at)
+      );
   }
 
   private getUnreadCount(
@@ -307,6 +359,8 @@ class LocalDatabase {
     if (!userId || !otherUserId || userId === otherUserId) return null;
     const db = this.getDB();
     if (!db.users.some((u) => u.id === otherUserId)) return null;
+    // Blocks are enforced at the data layer, not just hidden in the UI.
+    if (this.isBlockedBetween(db, userId, otherUserId)) return null;
 
     const found = this.findDirectConversation(db, userId, otherUserId);
     if (found) return found;
@@ -532,10 +586,39 @@ class LocalDatabase {
       .sort((a, b) => a.created_at.localeCompare(b.created_at));
   }
 
+  /** Messages joined with the reply target they quote (if any). */
+  public async getMessagesWithReplies(conversationId: string): Promise<MessageWithReply[]> {
+    const db = this.getDB();
+    const messages = db.messages
+      .filter((m) => m.conversation_id === conversationId)
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+
+    const byId = new Map(db.messages.map((m) => [m.id, m]));
+
+    return messages
+      .map((m) => {
+        const sender = db.users.find((u) => u.id === m.sender_id);
+        if (!sender) return null;
+        const replyTarget = m.reply_to_message_id
+          ? byId.get(m.reply_to_message_id)
+          : undefined;
+        const replyTo =
+          replyTarget && replyTarget.sender_id
+            ? {
+                ...replyTarget,
+                sender: db.users.find((u) => u.id === replyTarget.sender_id) ?? sender,
+              }
+            : null;
+        return { ...m, sender, replyTo };
+      })
+      .filter((x): x is MessageWithReply => x !== null);
+  }
+
   public async sendMessage(
     conversationId: string,
     senderId: string,
-    content: string
+    content: string,
+    replyToMessageId?: string | null
   ): Promise<Message | null> {
     const db = this.getDB();
     const trimmed = content.trim();
@@ -547,22 +630,43 @@ class LocalDatabase {
     const conversation = db.conversations.find((c) => c.id === conversationId);
     if (!isMember || !conversation) return null;
 
+    // Never allow sending into a conversation where either party is blocked.
+    const memberIds = db.conversation_members
+      .filter((m) => m.conversation_id === conversationId)
+      .map((m) => m.user_id);
+    for (const otherId of memberIds) {
+      if (otherId !== senderId && this.isBlockedBetween(db, senderId, otherId)) return null;
+    }
+
+    // Validate the reply target belongs to this conversation.
+    let replyToMessageIdResolved: string | null = null;
+    if (replyToMessageId) {
+      const target = db.messages.find(
+        (m) => m.id === replyToMessageId && m.conversation_id === conversationId
+      );
+      if (target) replyToMessageIdResolved = target.id;
+    }
+
     const now = new Date().toISOString();
     const message: Message = {
       id: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       conversation_id: conversationId,
       sender_id: senderId,
       content: trimmed.slice(0, 2000),
+      reply_to_message_id: replyToMessageIdResolved,
       created_at: now,
     };
     db.messages.push(message);
     conversation.updated_at = now;
 
-    // Notify the other members (mention type when someone is tagged).
+    // Notify the other members (mention type when someone is tagged). Skip
+    // members who muted the conversation or who blocked the sender.
     const members = db.conversation_members.filter(
       (m) => m.conversation_id === conversationId && m.user_id !== senderId
     );
     members.forEach((member) => {
+      if (this.isBlockedBetween(db, senderId, member.user_id)) return;
+      if (member.muted_until && member.muted_until > now) return;
       const user = db.users.find((u) => u.id === member.user_id);
       db.notifications.push(
         this.buildNotification({
@@ -582,6 +686,106 @@ class LocalDatabase {
 
     this.saveDB(db);
     return message;
+  }
+
+  /** Edit one of the sender's own messages. */
+  public async editMessage(
+    messageId: string,
+    senderId: string,
+    content: string
+  ): Promise<Message | null> {
+    const db = this.getDB();
+    const trimmed = content.trim();
+    if (!trimmed) return null;
+    const message = db.messages.find(
+      (m) => m.id === messageId && m.sender_id === senderId && !m.deleted_at
+    );
+    if (!message) return null;
+    message.content = trimmed.slice(0, 2000);
+    message.edited_at = new Date().toISOString();
+    this.saveDB(db);
+    return message;
+  }
+
+  /** Soft-delete a message (only the sender). */
+  public async deleteMessage(messageId: string, senderId: string): Promise<boolean> {
+    const db = this.getDB();
+    const message = db.messages.find(
+      (m) => m.id === messageId && m.sender_id === senderId && !m.deleted_at
+    );
+    if (!message) return false;
+    message.deleted_at = new Date().toISOString();
+    this.saveDB(db);
+    return true;
+  }
+
+  /** Mute a conversation for a member (e.g. for 24 hours). */
+  public async muteConversation(
+    conversationId: string,
+    userId: string,
+    durationMs = 24 * 60 * 60 * 1000
+  ): Promise<void> {
+    const db = this.getDB();
+    const member = db.conversation_members.find(
+      (m) => m.conversation_id === conversationId && m.user_id === userId
+    );
+    if (!member) return;
+    member.muted_until = new Date(Date.now() + durationMs).toISOString();
+    this.saveDB(db);
+  }
+
+  public async unmuteConversation(conversationId: string, userId: string): Promise<void> {
+    const db = this.getDB();
+    const member = db.conversation_members.find(
+      (m) => m.conversation_id === conversationId && m.user_id === userId
+    );
+    if (!member) return;
+    member.muted_until = null;
+    this.saveDB(db);
+  }
+
+  public async isConversationMuted(conversationId: string, userId: string): Promise<boolean> {
+    const member = this.getDB().conversation_members.find(
+      (m) => m.conversation_id === conversationId && m.user_id === userId
+    );
+    return Boolean(member?.muted_until && member.muted_until > new Date().toISOString());
+  }
+
+  /** Archive a conversation for a member (hides it from the default list). */
+  public async archiveConversation(conversationId: string, userId: string): Promise<void> {
+    const db = this.getDB();
+    const member = db.conversation_members.find(
+      (m) => m.conversation_id === conversationId && m.user_id === userId
+    );
+    if (!member) return;
+    member.archived_at = new Date().toISOString();
+    this.saveDB(db);
+  }
+
+  public async unarchiveConversation(conversationId: string, userId: string): Promise<void> {
+    const db = this.getDB();
+    const member = db.conversation_members.find(
+      (m) => m.conversation_id === conversationId && m.user_id === userId
+    );
+    if (!member) return;
+    member.archived_at = null;
+    this.saveDB(db);
+  }
+
+  public async isConversationArchived(conversationId: string, userId: string): Promise<boolean> {
+    const member = this.getDB().conversation_members.find(
+      (m) => m.conversation_id === conversationId && m.user_id === userId
+    );
+    return Boolean(member?.archived_at);
+  }
+
+  /** Presence: bump the user's last-seen timestamp (heartbeat). */
+  public async touchLastSeen(userId: string): Promise<void> {
+    const db = this.getDB();
+    const user = db.users.find((u) => u.id === userId);
+    if (!user) return;
+    user.last_seen_at = new Date().toISOString();
+    this.saveDB(db);
   }
 
   private isMentioned(content: string, user: User | undefined): boolean {
@@ -736,6 +940,249 @@ class LocalDatabase {
       }
     });
     if (changed) this.saveDB(db);
+  }
+
+  // --- Comments ---
+
+  public async getComments(postId: string): Promise<PostCommentWithUser[]> {
+    const db = this.getDB();
+    return db.comments
+      .filter((c) => c.post_id === postId)
+      .map((c) => {
+        const user = db.users.find((u) => u.id === c.author_id);
+        return user ? { ...c, user } : null;
+      })
+      .filter((x): x is PostCommentWithUser => x !== null)
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  }
+
+  public async getCommentCount(postId: string): Promise<number> {
+    return this.getDB().comments.filter((c) => c.post_id === postId && !c.deleted_at).length;
+  }
+
+  /**
+   * Add a comment (or a reply when parentCommentId is given). Notifies the
+   * post author for top-level comments, and the parent's author for replies.
+   */
+  public async createComment(input: {
+    postId: string;
+    authorId: string;
+    content: string;
+    parentCommentId?: string | null;
+  }): Promise<PostComment | null> {
+    const db = this.getDB();
+    const trimmed = input.content.trim();
+    if (!trimmed) return null;
+
+    const post = db.nearby_posts.find((p) => p.id === input.postId);
+    if (!post) return null;
+
+    const now = new Date().toISOString();
+    const comment: PostComment = {
+      id: `cmt_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      post_id: input.postId,
+      author_id: input.authorId,
+      parent_comment_id: input.parentCommentId ?? null,
+      content: trimmed.slice(0, 2000),
+      created_at: now,
+      updated_at: now,
+      deleted_at: null,
+    };
+    db.comments.push(comment);
+
+    const author = db.users.find((u) => u.id === input.authorId);
+
+    // Notify the right person — the post author, or the author of the comment
+    // being replied to (never yourself).
+    let notifyUserId: string | null = null;
+    let type = "comment";
+    if (input.parentCommentId) {
+      const parent = db.comments.find((c) => c.id === input.parentCommentId);
+      if (parent && parent.author_id !== input.authorId) {
+        notifyUserId = parent.author_id;
+        type = "reply";
+      }
+    } else if (post.user_id !== input.authorId) {
+      notifyUserId = post.user_id;
+    }
+
+    if (notifyUserId && !this.isBlockedBetween(db, input.authorId, notifyUserId)) {
+      db.notifications.push(
+        this.buildNotification({
+          db,
+          userId: notifyUserId,
+          actorId: input.authorId,
+          type,
+          content: trimmed.slice(0, 160),
+          relatedLink: `/nearby/${input.postId}`,
+          now,
+        })
+      );
+    }
+
+    this.saveDB(db);
+    return comment;
+  }
+
+  public async updateComment(id: string, authorId: string, content: string): Promise<PostComment | null> {
+    const db = this.getDB();
+    const comment = db.comments.find((c) => c.id === id && c.author_id === authorId && !c.deleted_at);
+    if (!comment) return null;
+    comment.content = content.trim().slice(0, 2000);
+    comment.updated_at = new Date().toISOString();
+    this.saveDB(db);
+    return comment;
+  }
+
+  /** Soft-delete a comment (keeps the row for thread context). */
+  public async deleteComment(id: string, authorId: string): Promise<boolean> {
+    const db = this.getDB();
+    const comment = db.comments.find((c) => c.id === id && c.author_id === authorId && !c.deleted_at);
+    if (!comment) return false;
+    comment.deleted_at = new Date().toISOString();
+    this.saveDB(db);
+    return true;
+  }
+
+  // --- Reactions ---
+
+  public async getReactions(postId: string): Promise<PostReaction[]> {
+    return this.getDB().reactions.filter((r) => r.post_id === postId);
+  }
+
+  public async getReactionCount(postId: string): Promise<number> {
+    return this.getDB().reactions.filter((r) => r.post_id === postId).length;
+  }
+
+  public async hasReacted(postId: string, userId: string): Promise<boolean> {
+    return this.getDB().reactions.some(
+      (r) => r.post_id === postId && r.user_id === userId
+    );
+  }
+
+  /** Toggle a reaction; notifies the post author when first liked. */
+  public async toggleReaction(
+    postId: string,
+    userId: string,
+    reactionType = "like"
+  ): Promise<{ reacted: boolean; count: number }> {
+    const db = this.getDB();
+    const post = db.nearby_posts.find((p) => p.id === postId);
+    if (!post) return { reacted: false, count: 0 };
+
+    const existingIndex = db.reactions.findIndex(
+      (r) => r.post_id === postId && r.user_id === userId
+    );
+
+    if (existingIndex !== -1) {
+      db.reactions.splice(existingIndex, 1);
+    } else {
+      db.reactions.push({
+        id: `rx_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        post_id: postId,
+        user_id: userId,
+        reaction_type: reactionType,
+        created_at: new Date().toISOString(),
+      });
+      // Notify the author (never yourself, never blocked users).
+      if (post.user_id !== userId && !this.isBlockedBetween(db, userId, post.user_id)) {
+        const actor = db.users.find((u) => u.id === userId);
+        db.notifications.push(
+          this.buildNotification({
+            db,
+            userId: post.user_id,
+            actorId: userId,
+            type: "reaction",
+            content: `${actor?.full_name || "A neighbour"} reacted to your post.`,
+            relatedLink: `/nearby/${postId}`,
+            now: new Date().toISOString(),
+          })
+        );
+      }
+    }
+
+    this.saveDB(db);
+    return {
+      reacted: existingIndex === -1,
+      count: db.reactions.filter((r) => r.post_id === postId).length,
+    };
+  }
+
+  // --- Blocks ---
+
+  public async blockUser(blockerId: string, blockedId: string): Promise<boolean> {
+    if (!blockerId || !blockedId || blockerId === blockedId) return false;
+    const db = this.getDB();
+    if (db.blocks.some((b) => b.blocker_id === blockerId && b.blocked_id === blockedId)) {
+      return true;
+    }
+    db.blocks.push({
+      id: `blk_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      blocker_id: blockerId,
+      blocked_id: blockedId,
+      created_at: new Date().toISOString(),
+    });
+    this.saveDB(db);
+    return true;
+  }
+
+  public async unblockUser(blockerId: string, blockedId: string): Promise<boolean> {
+    const db = this.getDB();
+    const before = db.blocks.length;
+    db.blocks = db.blocks.filter(
+      (b) => !(b.blocker_id === blockerId && b.blocked_id === blockedId)
+    );
+    if (db.blocks.length !== before) this.saveDB(db);
+    return db.blocks.length !== before;
+  }
+
+  public async isBlocked(blockerId: string, blockedId: string): Promise<boolean> {
+    return this.isBlockedBetween(this.getDB(), blockerId, blockedId);
+  }
+
+  public async getBlockedUserIds(userId: string): Promise<string[]> {
+    const db = this.getDB();
+    const ids = new Set<string>();
+    db.blocks.forEach((b) => {
+      if (b.blocker_id === userId) ids.add(b.blocked_id);
+      if (b.blocked_id === userId) ids.add(b.blocker_id);
+    });
+    return Array.from(ids);
+  }
+
+  /** True when either direction of a block exists between two users. */
+  private isBlockedBetween(db: DatabaseSchema, a: string, b: string): boolean {
+    return db.blocks.some(
+      (blk) =>
+        (blk.blocker_id === a && blk.blocked_id === b) ||
+        (blk.blocker_id === b && blk.blocked_id === a)
+    );
+  }
+
+  // --- Reports ---
+
+  public async createReport(input: {
+    reporterId: string;
+    targetType: ReportTargetType;
+    targetId: string;
+    reason: string;
+    description?: string;
+  }): Promise<Report | null> {
+    const db = this.getDB();
+    if (!db.users.some((u) => u.id === input.reporterId)) return null;
+    const report: Report = {
+      id: `rpt_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      reporter_id: input.reporterId,
+      target_type: input.targetType,
+      target_id: input.targetId,
+      reason: input.reason.trim().slice(0, 200),
+      description: input.description?.trim().slice(0, 2000) ?? "",
+      status: "open",
+      created_at: new Date().toISOString(),
+    };
+    db.reports.push(report);
+    this.saveDB(db);
+    return report;
   }
 
   // --- Help Requests ---

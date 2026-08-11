@@ -42,7 +42,7 @@ function GoogleIcon({ className }: { className?: string }) {
 
 export default function SignupPage() {
   const router = useRouter();
-  const { signup, signInWithGoogle, isGoogleLoading } = useAuth();
+  const { signUpWithEmail, signInWithGoogle, isGoogleLoading } = useAuth();
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -59,12 +59,38 @@ export default function SignupPage() {
     setIsLoading(true);
 
     try {
-      const res = await signup(email, name);
+      // 1. Server-side email validation (syntax + disposable-domain check).
+      const validateRes = await fetch("/api/auth/validate-signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const validation = (await validateRes.json()) as {
+        valid?: boolean;
+        error?: string;
+      };
+      if (validation.error) {
+        setError(validation.error);
+        return;
+      }
+
+      // 2. Create the Supabase account (email confirmation required).
+      const res = await signUpWithEmail({
+        email,
+        password,
+        fullName: name,
+        neighbourhood,
+      });
+      if (res.requiresVerification) {
+        router.push(`/verify-email?email=${encodeURIComponent(email)}`);
+        return;
+      }
       if (res.error) {
         setError(res.error);
-      } else {
-        router.push("/onboarding/location");
+        return;
       }
+
+      router.push("/onboarding/location");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to create account. Please try again.");
     } finally {

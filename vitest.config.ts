@@ -28,6 +28,9 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": resolve(__dirname, "./src"),
+      // `server-only` is an empty marker package for Next.js; alias it so
+      // server-only modules can be imported in unit tests.
+      "server-only": resolve(__dirname, "./tests/unit/mocks/server-only.ts"),
     },
   },
 });

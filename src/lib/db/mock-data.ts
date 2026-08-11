@@ -8,6 +8,8 @@ import {
   Message,
   MessageRead,
   AppNotification,
+  PostComment,
+  PostReaction,
 } from "./types";
 
 const MIN = 60 * 1000;
@@ -28,6 +30,7 @@ export const MOCK_USERS: User[] = [
     neighbourhood: "Bandra West",
     location_radius: 5,
     neighbour_score: 120,
+    last_seen_at: new Date().toISOString(),
     created_at: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
     updated_at: new Date().toISOString(),
   },
@@ -40,6 +43,7 @@ export const MOCK_USERS: User[] = [
     neighbourhood: "Andheri East",
     location_radius: 10,
     neighbour_score: 350,
+    last_seen_at: new Date(Date.now() - 45 * MIN).toISOString(),
     created_at: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString(),
     updated_at: new Date().toISOString(),
   },
@@ -329,6 +333,56 @@ export const MOCK_HELP_PROFILES: HelpProfile[] = [
     created_at: new Date(Date.now() - 50 * 24 * 60 * 60 * 1000).toISOString(),
     updated_at: new Date(Date.now() - 50 * 24 * 60 * 60 * 1000).toISOString(),
   }
+];
+
+export const MOCK_COMMENTS: PostComment[] = [
+  {
+    id: "cmt_1",
+    post_id: "post_1",
+    author_id: "user_2",
+    parent_comment_id: null,
+    content: "I think I saw a similar dog near Carter Road this morning around 9 AM.",
+    created_at: hoursAgo(1.5),
+    updated_at: hoursAgo(1.5),
+    deleted_at: null,
+  },
+  {
+    id: "cmt_2",
+    post_id: "post_1",
+    author_id: "user_3",
+    parent_comment_id: null,
+    content: "Shared in the society WhatsApp group. Hope you find her soon! 🙏",
+    created_at: hoursAgo(1),
+    updated_at: hoursAgo(1),
+    deleted_at: null,
+  },
+  {
+    id: "cmt_3",
+    post_id: "post_1",
+    author_id: "user_1",
+    parent_comment_id: "cmt_1",
+    content: "Thank you Rahul! Was it wearing a red collar?",
+    created_at: minutesAgo(45),
+    updated_at: minutesAgo(45),
+    deleted_at: null,
+  },
+  {
+    id: "cmt_4",
+    post_id: "post_2",
+    author_id: "user_3",
+    parent_comment_id: null,
+    content: "Thanks for the heads-up — will fill up buckets tonight.",
+    created_at: hoursAgo(4),
+    updated_at: hoursAgo(4),
+    deleted_at: null,
+  },
+];
+
+export const MOCK_REACTIONS: PostReaction[] = [
+  { id: "rx_1", post_id: "post_1", user_id: "user_2", reaction_type: "like", created_at: hoursAgo(1.4) },
+  { id: "rx_2", post_id: "post_1", user_id: "user_3", reaction_type: "like", created_at: hoursAgo(1.2) },
+  { id: "rx_3", post_id: "post_2", user_id: "user_1", reaction_type: "like", created_at: hoursAgo(4) },
+  { id: "rx_4", post_id: "post_2", user_id: "user_3", reaction_type: "like", created_at: hoursAgo(3.5) },
 ];
 
 export const MOCK_HELP_REQUESTS: HelpRequest[] = [

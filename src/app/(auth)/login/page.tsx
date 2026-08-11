@@ -43,7 +43,7 @@ function GoogleIcon({ className }: { className?: string }) {
 function LoginContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { login, signInWithGoogle, isGoogleLoading } = useAuth();
+  const { login, signInWithPassword, signInWithGoogle, isGoogleLoading } = useAuth();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -61,11 +61,39 @@ function LoginContent() {
 
   const isAnyLoading = isLoading || isGoogleLoading;
 
+  // Are the Supabase env vars present? (Exposed to the client as NEXT_PUBLIC_*.)
+  const supabaseConfigured = Boolean(
+    process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  );
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    setIsLoading(true);
 
+    // Email/password goes through Supabase Auth (the real identity system).
+    if (supabaseConfigured) {
+      setIsLoading(true);
+      try {
+        const res = await signInWithPassword(email, password);
+        if (res.requiresVerification) {
+          router.push(`/verify-email?email=${encodeURIComponent(email)}`);
+          return;
+        }
+        if (res.error) {
+          setError(res.error);
+        } else {
+          router.push("/home");
+        }
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "Failed to sign in. Please check your credentials.");
+      } finally {
+        setIsLoading(false);
+      }
+      return;
+    }
+
+    // Fallback: local demo layer when Supabase isn't configured.
+    setIsLoading(true);
     try {
       const res = await login(email);
       if (res.error) {

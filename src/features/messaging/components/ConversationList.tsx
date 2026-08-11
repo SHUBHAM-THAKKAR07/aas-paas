@@ -1,6 +1,7 @@
 "use client";
 
-import { MessageCircle } from "lucide-react";
+import { useMemo, useState } from "react";
+import { MessageCircle, Search, Archive, Inbox } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { CountBadge } from "@/components/ui/count-badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -29,6 +30,27 @@ export function ConversationList({
   onNewMessage,
   loading,
 }: ConversationListProps) {
+  const [query, setQuery] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
+
+  const filtered = useMemo(() => {
+    const visible = conversations.filter((c) =>
+      showArchived ? Boolean(c.archived) : !c.archived
+    );
+    const q = query.trim().toLowerCase();
+    if (!q) return visible;
+    return visible.filter((summary) => {
+      const haystack = [
+        conversationTitle(summary),
+        summary.lastMessage?.content ?? "",
+        summary.lastSenderName ?? "",
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [conversations, query, showArchived]);
+
   if (loading) {
     return (
       <div className="p-3 space-y-2">
@@ -60,8 +82,64 @@ export function ConversationList({
   }
 
   return (
-    <div className="flex flex-col gap-1 p-2" role="list" aria-label="Conversations">
-      {conversations.map((summary) => {
+    <div className="flex flex-col">
+      <div className="px-3 pt-3 pb-1 space-y-2">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowArchived(false)}
+            className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl label-sm font-semibold transition-colors ${
+              !showArchived
+                ? "bg-surface-container-high text-on-surface"
+                : "text-on-surface-variant hover:text-on-surface"
+            }`}
+            aria-pressed={!showArchived}
+          >
+            <Inbox size={14} />
+            Inbox
+          </button>
+          <button
+            onClick={() => setShowArchived(true)}
+            className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl label-sm font-semibold transition-colors ${
+              showArchived
+                ? "bg-surface-container-high text-on-surface"
+                : "text-on-surface-variant hover:text-on-surface"
+            }`}
+            aria-pressed={showArchived}
+          >
+            <Archive size={14} />
+            Archived
+          </button>
+        </div>
+        <div className="relative">
+          <Search
+            size={16}
+            className="absolute left-3.5 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none"
+          />
+          <input
+            type="search"
+            name="search-conversations"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search conversations"
+            aria-label="Search conversations"
+            className="w-full h-10 pl-9 pr-4 rounded-xl bg-surface-container-low border border-outline-variant/30 text-on-surface label-md placeholder:text-on-surface-variant/70 focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all"
+          />
+        </div>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="p-8 text-center">
+          <p className="body-md text-on-surface-variant">
+            {showArchived
+              ? "Nothing archived yet."
+              : query
+                ? `No conversations match “${query}”.`
+                : "No conversations."}
+          </p>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1 p-2" role="list" aria-label="Conversations">
+      {filtered.map((summary) => {
         const id = summary.conversation.id;
         const active = id === activeId;
         return (
@@ -112,6 +190,8 @@ export function ConversationList({
           </button>
         );
       })}
+        </div>
+      )}
     </div>
   );
 }

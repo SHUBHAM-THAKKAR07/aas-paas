@@ -2,44 +2,52 @@
 
 import React, { useEffect, useState, use } from "react";
 import Link from "next/link";
-import { ArrowLeft, MapPin, Heart, MessageCircle, Share2, Send } from "lucide-react";
+import { ArrowLeft, MapPin, Heart, MessageCircle } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { Skeleton } from "@/components/ui/skeleton";
 import { db } from "@/lib/db/local-db";
 import { NearbyPostWithUser } from "@/lib/db/types";
 import { useAuth } from "@/lib/auth/AuthContext";
+import { CommentsSection } from "@/features/comments/components/CommentsSection";
+import { formatDistanceToNow } from "date-fns";
+import { format } from "date-fns";
 
 export default function NearbyDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { user } = useAuth();
   const [post, setPost] = useState<NearbyPostWithUser | null>(null);
-  const [commentText, setCommentText] = useState("");
-  const [comments, setComments] = useState<Array<{ id: string; author: string; text: string; time: string }>>([
-    { id: "c1", author: "Rahul M.", text: "Thanks for sharing this update!", time: "10m ago" }
-  ]);
+  const [reactionCount, setReactionCount] = useState(0);
+  const [commentCount, setCommentCount] = useState(0);
+  const [reacted, setReacted] = useState(false);
 
   useEffect(() => {
-    db.getNearbyPosts().then((posts) => {
-      const found = posts.find((p) => p.id === id);
-      if (found) setPost(found);
+    void Promise.resolve().then(() => {
+      void db.getNearbyPosts().then((posts) => {
+        const found = posts.find((p) => p.id === id);
+        if (found) setPost(found);
+      });
+      void db.getReactionCount(id).then(setReactionCount);
+      void db.getCommentCount(id).then(setCommentCount);
+      if (user) void db.hasReacted(id, user.id).then(setReacted);
     });
-  }, [id]);
+    const refresh = () => {
+      void db.getReactionCount(id).then(setReactionCount);
+      void db.getCommentCount(id).then(setCommentCount);
+    };
+    window.addEventListener("local-db-changed", refresh);
+    window.addEventListener("storage", refresh);
+    return () => {
+      window.removeEventListener("local-db-changed", refresh);
+      window.removeEventListener("storage", refresh);
+    };
+  }, [id, user]);
 
-  const handleAddComment = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!commentText.trim()) return;
-    setComments((prev) => [
-      ...prev,
-      {
-        id: Date.now().toString(),
-        author: user?.full_name || "You",
-        text: commentText,
-        time: "Just now",
-      },
-    ]);
-    setCommentText("");
+  const toggleReaction = async () => {
+    if (!user) return;
+    const res = await db.toggleReaction(id, user.id);
+    setReacted(res.reacted);
+    setReactionCount(res.count);
   };
 
   return (
@@ -48,63 +56,69 @@ export default function NearbyDetailPage({ params }: { params: Promise<{ id: str
         <ArrowLeft size={18} /> Back to Nearby
       </Link>
 
-      <Card className="p-6 md:p-8 space-y-6">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container font-bold flex items-center justify-center text-lg">
-              {post?.user?.full_name?.charAt(0) || "P"}
-            </div>
-            <div>
-              <h3 className="label-md font-bold text-on-surface">{post?.user?.full_name || "Priya M."}</h3>
-              <p className="label-sm text-on-surface-variant flex items-center gap-1">
-                <MapPin size={12} className="text-secondary" /> Indiranagar · 20m ago
-              </p>
-            </div>
-          </div>
-          <Badge variant="nearby">{post?.category || "General"}</Badge>
-        </div>
-
-        <p className="body-lg text-on-surface leading-relaxed">
-          {post?.content || "Discussion and details regarding this neighbourhood update."}
-        </p>
-
-        {post?.images && post.images.length > 0 && (
-          <div className="grid gap-2">
-            {post.images.map((img, i) => (
-              <img key={i} src={img} alt="Post media" className="w-full rounded-2xl object-cover max-h-80" />
-            ))}
-          </div>
-        )}
-
-        <div className="pt-4 border-t border-outline-variant/20 space-y-4">
-          <h4 className="headline-md font-bold text-on-surface">Responses ({comments.length})</h4>
-
-          <div className="space-y-3">
-            {comments.map((c) => (
-              <div key={c.id} className="p-4 rounded-2xl bg-surface-container-low border border-outline-variant/30 space-y-1">
-                <div className="flex justify-between items-center">
-                  <span className="label-md font-bold text-on-surface">{c.author}</span>
-                  <span className="label-sm text-on-surface-variant/70">{c.time}</span>
-                </div>
-                <p className="body-md text-on-surface-variant">{c.text}</p>
+      {!post ? (
+        <Card className="p-6 space-y-4">
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-24 w-full" />
+        </Card>
+      ) : (
+        <Card className="p-6 md:p-8 space-y-6">
+          <div className="flex items-center justify-between">
+            <Link href={`/profile/${post.user.id}`} className="flex items-center gap-3 group min-w-0">
+              <div className="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container font-bold flex items-center justify-center text-lg overflow-hidden shrink-0">
+                {post.user.avatar_url ? (
+                  <img src={post.user.avatar_url} alt="" className="w-full h-full object-cover" />
+                ) : (
+                  post.user.full_name?.charAt(0) || "P"
+                )}
               </div>
-            ))}
+              <div className="min-w-0">
+                <h3 className="label-md font-bold text-on-surface group-hover:text-primary transition-colors">
+                  {post.user.full_name || "Neighbour"}
+                </h3>
+                <p className="label-sm text-on-surface-variant flex items-center gap-1">
+                  <MapPin size={12} className="text-secondary" />
+                  {post.user.neighbourhood || "Nearby"} · {formatDistanceToNow(new Date(post.created_at), { addSuffix: true })}
+                </p>
+              </div>
+            </Link>
+            <Badge variant="nearby">{post.category || "General"}</Badge>
           </div>
 
-          <form onSubmit={handleAddComment} className="space-y-3 pt-2">
-            <Textarea
-              rows={3}
-              placeholder="Write a response or reply..."
-              value={commentText}
-              onChange={(e) => setCommentText(e.target.value)}
-              required
-            />
-            <Button type="submit" variant="primary" size="md" className="hover-lift" rightIcon={<Send size={16} />}>
-              Post Response
-            </Button>
-          </form>
-        </div>
-      </Card>
+          <p className="body-lg text-on-surface leading-relaxed whitespace-pre-wrap">
+            {post.content}
+          </p>
+
+          {post.images && post.images.length > 0 && (
+            <div className="grid gap-2">
+              {post.images.map((img, i) => (
+                <img key={i} src={img} alt="Post media" className="w-full rounded-2xl object-cover max-h-80" />
+              ))}
+            </div>
+          )}
+
+          <div className="flex items-center gap-4 pt-1">
+            <button
+              onClick={() => void toggleReaction()}
+              className={`flex items-center gap-1.5 label-sm font-semibold transition-colors ${
+                reacted ? "text-primary font-bold" : "text-on-surface-variant hover:text-primary"
+              }`}
+            >
+              <Heart size={18} className={reacted ? "fill-primary" : ""} />
+              <span>{reactionCount} {reactionCount === 1 ? "Like" : "Likes"}</span>
+            </button>
+            <span className="flex items-center gap-1.5 label-sm font-semibold text-on-surface-variant">
+              <MessageCircle size={18} />
+              <span>{commentCount} Responses</span>
+            </span>
+            <span className="label-sm text-on-surface-variant/70 ml-auto">
+              Posted {format(new Date(post.created_at), "d MMM yyyy, h:mm a")}
+            </span>
+          </div>
+
+          <CommentsSection postId={id} postAuthorId={post.user_id} />
+        </Card>
+      )}
     </div>
   );
 }

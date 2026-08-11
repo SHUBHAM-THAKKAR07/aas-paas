@@ -1,17 +1,52 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useCallback,
+  useRef,
+} from "react";
+import type { User as SupabaseUser } from "@supabase/supabase-js";
 import { User } from "../db/types";
 import { db } from "../db/local-db";
 import { createClient } from "@/lib/supabase/client";
+import {
+  isSessionVerified,
+  requiresEmailVerification,
+} from "./verification";
 
 interface AuthContextType {
+  /** Local Aas-Paas profile used by the demo data layer. */
   user: User | null;
   loading: boolean;
   isGoogleLoading: boolean;
+  /** True when the current Supabase session's email is verified. */
+  emailVerified: boolean;
+  /** True when a Supabase session exists but the email isn't verified yet. */
+  requiresVerification: boolean;
+  /** Local demo login (no Supabase). */
   login: (email: string) => Promise<{ error?: string }>;
+  /** Local demo signup (no Supabase). */
   signup: (email: string, fullName: string) => Promise<{ error?: string }>;
+  /** Production email + password sign in (Supabase). */
+  signInWithPassword: (
+    email: string,
+    password: string
+  ) => Promise<{ error?: string; requiresVerification?: boolean }>;
+  /** Production email signup (Supabase, requires email confirmation). */
+  signUpWithEmail: (input: {
+    email: string;
+    password: string;
+    fullName: string;
+    neighbourhood?: string;
+  }) => Promise<{ error?: string; requiresVerification?: boolean }>;
   signInWithGoogle: () => Promise<{ error?: string }>;
+  /** Send a password-reset email (Supabase). */
+  resetPassword: (email: string) => Promise<{ error?: string }>;
+  /** Set a new password for the current session (Supabase). */
+  updatePassword: (password: string) => Promise<{ error?: string }>;
   logout: () => void;
 }
 
@@ -21,6 +56,7 @@ const LOCAL_USER_ID_KEY = "aas_paas_user_id";
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
+  const [supabaseUser, setSupabaseUser] = useState<SupabaseUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [supabase] = useState(() => createClient());
@@ -28,12 +64,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const mountedRef = useRef(true);
 
   /**
-   * Upsert a Google-authenticated user into the local database.
-   * Creates a new user if one doesn't exist, or updates the existing record.
-   * Supabase is the auth source of truth; the local DB only stores the
-   * Aas-Paas profile for that authenticated identity.
+   * Upsert a Supabase-authenticated identity into the local database so the
+   * demo data layer (Nearby / Help / Need / profiles) keeps working while the
+   * production Supabase data layer is being adopted.
    */
-  const upsertGoogleUser = useCallback(
+  const upsertLocalProfile = useCallback(
     async (supabaseUser: {
       id: string;
       email?: string;
@@ -57,7 +92,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         localUser = await db.updateUser(existing.id, {
           full_name: fullName || existing.full_name,
           avatar_url: avatarUrl || existing.avatar_url,
-          provider: "google",
         });
       } else {
         localUser = await db.createUser({
@@ -68,7 +102,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           neighbourhood: "",
           location_radius: 5,
           neighbour_score: 50,
-          provider: "google",
         });
       }
 
@@ -93,27 +126,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Initial session restore — Supabase session takes priority, local DB is the
-  // fallback for email/demo accounts that have no Supabase session.
+  // fallback for demo accounts that have no Supabase session.
   useEffect(() => {
     const initAuth = async () => {
-      let supabaseUserId: string | null = null;
+      let sessionUser: SupabaseUser | null = null;
 
       if (supabase) {
         const {
           data: { session },
         } = await supabase.auth.getSession();
         if (session?.user) {
-          supabaseUserId = session.user.id;
-          await upsertGoogleUser(session.user);
+          sessionUser = session.user;
+          setSupabaseUser(session.user);
+          await upsertLocalProfile(session.user);
         }
       }
 
       if (!mountedRef.current) return;
 
       // No Supabase session → restore the previously stored local user
-      // (email or demo login). Re-assert it only when it differs, so a Google
+      // (demo login). Re-assert it only when it differs, so a Supabase
       // upsert above is never overwritten by a stale local record.
-      if (!supabaseUserId) {
+      if (!sessionUser) {
         const storedUserId = localStorage.getItem(LOCAL_USER_ID_KEY);
         if (storedUserId) {
           const u = await db.getUser(storedUserId);
@@ -125,10 +159,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
+      // Best-effort server-side presence update (last_seen_at) for production.
+      if (sessionUser && mountedRef.current) {
+        void fetch("/api/auth/heartbeat", { method: "POST" }).catch(() => {
+          /* non-critical */
+        });
+      }
+
       if (mountedRef.current) setLoading(false);
     };
     initAuth();
-  }, [supabase, upsertGoogleUser]);
+  }, [supabase, upsertLocalProfile]);
 
   // Live auth events. INITIAL_SESSION fires when the client restores a session
   // on load; SIGNED_IN fires on new logins (e.g. after the OAuth callback).
@@ -138,14 +179,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === "SIGNED_IN" && session?.user) {
-        await upsertGoogleUser(session.user);
-      }
-      if (event === "INITIAL_SESSION" && session?.user) {
-        // Sync the local profile with the restored session. Idempotent.
-        await upsertGoogleUser(session.user);
+      if ((event === "SIGNED_IN" || event === "INITIAL_SESSION") && session?.user) {
+        setSupabaseUser(session.user);
+        // Keep ProtectedRoute on the spinner until the local profile is
+        // synced, so a fresh sign-in never flashes back to /login.
+        setLoading(true);
+        await upsertLocalProfile(session.user);
+        if (mountedRef.current) setLoading(false);
       }
       if (event === "SIGNED_OUT") {
+        setSupabaseUser(null);
         clearLocalSession();
       }
     });
@@ -153,7 +196,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       subscription.unsubscribe();
     };
-  }, [supabase, upsertGoogleUser, clearLocalSession]);
+  }, [supabase, upsertLocalProfile, clearLocalSession]);
 
   const login = async (email: string) => {
     const u = await db.getUserByEmail(email);
@@ -182,6 +225,68 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(LOCAL_USER_ID_KEY, newUser.id);
     setUser(newUser);
     return {};
+  };
+
+  const signInWithPassword = async (email: string, password: string) => {
+    if (!supabase) {
+      return {
+        error:
+          "Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in .env.local",
+      };
+    }
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        // Unverified accounts should be directed to the verification screen.
+        if (error.code === "email_not_confirmed") {
+          return {
+            error: "Please verify your email address before signing in.",
+            requiresVerification: true,
+          };
+        }
+        return { error: error.message };
+      }
+      return {};
+    } catch (err: unknown) {
+      return {
+        error:
+          err instanceof Error ? err.message : "Failed to sign in. Please try again.",
+      };
+    }
+  };
+
+  const signUpWithEmail = async (input: {
+    email: string;
+    password: string;
+    fullName: string;
+    neighbourhood?: string;
+  }) => {
+    if (!supabase) {
+      return {
+        error:
+          "Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in .env.local",
+      };
+    }
+    try {
+      const { error } = await supabase.auth.signUp({
+        email: input.email,
+        password: input.password,
+        options: {
+          data: {
+            full_name: input.fullName,
+            neighbourhood: input.neighbourhood ?? "",
+          },
+          emailRedirectTo: `${window.location.origin}/auth/callback?next=/home`,
+        },
+      });
+      if (error) return { error: error.message };
+      return { requiresVerification: true };
+    } catch (err: unknown) {
+      return {
+        error:
+          err instanceof Error ? err.message : "Failed to create account. Please try again.",
+      };
+    }
   };
 
   const signInWithGoogle = async () => {
@@ -219,8 +324,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const resetPassword = async (email: string) => {
+    if (!supabase) {
+      return { error: "Supabase is not configured." };
+    }
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/auth/callback?next=/reset-password`,
+      });
+      if (error) return { error: error.message };
+      return {};
+    } catch (err: unknown) {
+      return {
+        error:
+          err instanceof Error ? err.message : "Failed to send reset link. Please try again.",
+      };
+    }
+  };
+
+  const updatePassword = async (password: string) => {
+    if (!supabase) {
+      return { error: "Supabase is not configured." };
+    }
+    try {
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) return { error: error.message };
+      return {};
+    } catch (err: unknown) {
+      return {
+        error:
+          err instanceof Error ? err.message : "Failed to update password. Please try again.",
+      };
+    }
+  };
+
   const logout = () => {
     clearLocalSession();
+    setSupabaseUser(null);
 
     // Also sign out of Supabase if available.
     if (supabase) {
@@ -230,9 +370,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const emailVerified = !supabaseUser || isSessionVerified(supabaseUser);
+
   return (
     <AuthContext.Provider
-      value={{ user, loading, isGoogleLoading, login, signup, signInWithGoogle, logout }}
+      value={{
+        user,
+        loading,
+        isGoogleLoading,
+        emailVerified,
+        requiresVerification: requiresEmailVerification(supabaseUser),
+        login,
+        signup,
+        signInWithPassword,
+        signUpWithEmail,
+        signInWithGoogle,
+        resetPassword,
+        updatePassword,
+        logout,
+      }}
     >
       {children}
     </AuthContext.Provider>

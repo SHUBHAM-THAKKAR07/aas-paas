@@ -1,9 +1,12 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
-import { MapPin, MessageCircle, Heart, Share2 } from "lucide-react";
+import { MapPin, MessageCircle, Heart, Flag } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { db } from "@/lib/db/local-db";
+import { useAuth } from "@/lib/auth/AuthContext";
 import type { NearbyPostWithUser } from "@/lib/db/types";
 
 interface AuthorBlockProps {
@@ -46,12 +49,48 @@ interface NearbyPostCardProps {
 }
 
 export function NearbyPostCard({ post }: NearbyPostCardProps) {
-  const [likes, setLikes] = useState(12);
+  const { user } = useAuth();
+  const [likes, setLikes] = useState(0);
   const [isLiked, setIsLiked] = useState(false);
+  const [commentCount, setCommentCount] = useState(0);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportReason, setReportReason] = useState("");
+  const [reportSent, setReportSent] = useState(false);
 
-  const handleLike = () => {
-    setIsLiked(!isLiked);
-    setLikes(prev => isLiked ? prev - 1 : prev + 1);
+  useEffect(() => {
+    void db.getReactionCount(post.id).then(setLikes);
+    void db.getCommentCount(post.id).then(setCommentCount);
+    if (user) void db.hasReacted(post.id, user.id).then(setIsLiked);
+    const refresh = () => {
+      void db.getReactionCount(post.id).then(setLikes);
+      void db.getCommentCount(post.id).then(setCommentCount);
+    };
+    window.addEventListener("local-db-changed", refresh);
+    window.addEventListener("storage", refresh);
+    return () => {
+      window.removeEventListener("local-db-changed", refresh);
+      window.removeEventListener("storage", refresh);
+    };
+  }, [post.id, user]);
+
+  const handleLike = async () => {
+    if (!user) return;
+    const res = await db.toggleReaction(post.id, user.id);
+    setIsLiked(res.reacted);
+    setLikes(res.count);
+  };
+
+  const submitReport = async () => {
+    if (!user || !reportReason.trim()) return;
+    await db.createReport({
+      reporterId: user.id,
+      targetType: "post",
+      targetId: post.id,
+      reason: reportReason,
+      description: post.content,
+    });
+    setReportReason("");
+    setReportSent(true);
   };
 
   const authorName = post.user?.full_name || "Neighbour";
@@ -107,7 +146,7 @@ export function NearbyPostCard({ post }: NearbyPostCardProps) {
       <div className="mt-5 flex items-center justify-between border-t border-outline-variant/20 pt-3">
         <div className="flex items-center gap-4">
           <button
-            onClick={handleLike}
+            onClick={() => void handleLike()}
             className={`flex items-center gap-1.5 label-sm font-semibold transition-colors ${
               isLiked ? "text-primary font-bold" : "text-on-surface-variant hover:text-primary"
             }`}
@@ -120,14 +159,91 @@ export function NearbyPostCard({ post }: NearbyPostCardProps) {
             className="flex items-center gap-1.5 label-sm font-semibold text-on-surface-variant hover:text-primary transition-colors"
           >
             <MessageCircle size={18} />
-            <span>Respond</span>
+            <span>{commentCount} Response{commentCount === 1 ? "" : "s"}</span>
           </Link>
         </div>
-        <button className="flex items-center gap-1.5 label-sm font-semibold text-on-surface-variant hover:text-primary transition-colors">
-          <Share2 size={18} />
-          <span className="hidden sm:inline">Share</span>
+        <button
+          onClick={() => {
+            setReportSent(false);
+            setReportOpen(true);
+          }}
+          className="flex items-center gap-1.5 label-sm font-semibold text-on-surface-variant hover:text-error transition-colors"
+          aria-label="Report post"
+        >
+          <Flag size={16} />
         </button>
       </div>
+
+      {/* Report dialog */}
+      {reportOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Report post"
+          onClick={() => {
+            if (!reportSent) setReportOpen(false);
+          }}
+        >
+          <div
+            className="w-full max-w-md rounded-3xl bg-surface-container-lowest border border-outline-variant/30 soft-card-shadow p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="headline-sm font-bold text-on-surface flex items-center gap-2">
+              <Flag size={18} className="text-error" />
+              Report post
+            </h3>
+            {reportSent ? (
+              <>
+                <p className="body-md text-on-surface-variant">
+                  Thanks — our moderation team will review this post.
+                </p>
+                <div className="flex justify-end">
+                  <Button variant="primary" size="md" onClick={() => setReportOpen(false)}>
+                    Done
+                  </Button>
+                </div>
+              </>
+            ) : user ? (
+              <>
+                <select
+                  value={reportReason}
+                  onChange={(e) => setReportReason(e.target.value)}
+                  className="w-full h-12 px-4 rounded-2xl border border-outline-variant bg-surface-container-lowest text-on-surface body-md outline-none focus:border-primary"
+                  aria-label="Report reason"
+                >
+                  <option value="">Choose a reason…</option>
+                  <option value="Spam or scam">Spam or scam</option>
+                  <option value="Misinformation">Misinformation</option>
+                  <option value="Harassment or abuse">Harassment or abuse</option>
+                  <option value="Inappropriate content">Inappropriate content</option>
+                  <option value="Other">Other</option>
+                </select>
+                <div className="flex gap-2 justify-end pt-2">
+                  <Button variant="ghost" size="md" onClick={() => setReportOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="md"
+                    onClick={() => void submitReport()}
+                    disabled={!reportReason.trim()}
+                  >
+                    Submit report
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <p className="body-md text-on-surface-variant">
+                <Link href="/login" className="text-primary font-semibold hover:underline">
+                  Sign in
+                </Link>{" "}
+                to report this post.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
     </Card>
   );
 }

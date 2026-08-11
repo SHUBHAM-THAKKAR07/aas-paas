@@ -11,16 +11,15 @@ test.describe("Aas-Paas smoke tests", () => {
     await expect(page.locator("h1").first()).toContainText("Aas-Paas");
   });
 
-  test("home route loads the app shell", async ({ page }) => {
+  test("unauthenticated app routes redirect to login", async ({ page }) => {
+    // ProtectedRoute sends unauthenticated visitors to /login.
     await page.goto("/home");
-    // Should load the app layout (even if unauthenticated — no redirect yet)
-    await expect(page.locator("main")).toBeVisible();
+    await expect(page).toHaveURL(/\/login/);
   });
 
-  test("api/health returns 200", async ({ request }) => {
-    const response = await request.get("/api/health");
-    expect(response.status()).toBe(200);
-    const body = await response.json();
-    expect(body.status).toBe("ok");
+  test("cron endpoint rejects requests without the CRON_SECRET bearer token", async ({ request }) => {
+    // No Authorization header → must be rejected before any work happens.
+    const response = await request.get("/api/cron/cleanup-unverified");
+    expect(response.status()).toBe(401);
   });
 });

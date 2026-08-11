@@ -2,7 +2,7 @@
 
 import React, { use, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, MapPin, MessageCircle, Award, Pencil, CalendarDays, HeartHandshake, User } from "lucide-react";
+import { ArrowLeft, MapPin, MessageCircle, Award, Pencil, CalendarDays, HeartHandshake, User, Ban, Flag, Unlock } from "lucide-react";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { db } from "@/lib/db/local-db";
 import { Avatar } from "@/components/ui/avatar";
@@ -35,6 +35,11 @@ export default function PublicProfilePage({ params }: { params: Promise<{ userId
   const [helpProfile, setHelpProfile] = useState<HelpProfileWithUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [messaging, setMessaging] = useState(false);
+  const [blocked, setBlocked] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportReason, setReportReason] = useState("");
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportSent, setReportSent] = useState(false);
 
   const load = useCallback(async () => {
     const [u, allPosts, helpProfiles] = await Promise.all([
@@ -46,9 +51,10 @@ export default function PublicProfilePage({ params }: { params: Promise<{ userId
       setProfile(u);
       setPosts(allPosts.filter((p) => p.user_id === userId));
       setHelpProfile(helpProfiles.find((h) => h.user_id === userId) ?? null);
+      if (me) setBlocked(await db.isBlocked(me.id, userId));
     }
     setLoading(false);
-  }, [userId]);
+  }, [userId, me]);
 
   // Initial state is already `true`; load() flips it off after the fetch.
   // Deferred through a microtask so setState never runs synchronously.
@@ -69,11 +75,37 @@ export default function PublicProfilePage({ params }: { params: Promise<{ userId
   const isMe = me?.id === userId;
 
   const handleMessage = async () => {
-    if (!me || messaging) return;
+    if (!me || messaging || blocked) return;
     setMessaging(true);
     const conversationId = await startDirectConversation(me.id, userId);
     setMessaging(false);
     if (conversationId) router.push(`/messages?c=${conversationId}`);
+  };
+
+  const handleBlock = async () => {
+    if (!me) return;
+    if (blocked) {
+      await db.unblockUser(me.id, userId);
+      setBlocked(false);
+    } else {
+      await db.blockUser(me.id, userId);
+      setBlocked(true);
+    }
+  };
+
+  const handleReport = async () => {
+    if (!me || !reportReason.trim() || reportBusy) return;
+    setReportBusy(true);
+    await db.createReport({
+      reporterId: me.id,
+      targetType: "user",
+      targetId: userId,
+      reason: reportReason,
+    });
+    setReportBusy(false);
+    setReportSent(true);
+    setReportOpen(false);
+    setReportReason("");
   };
 
   if (loading) {
@@ -149,7 +181,7 @@ export default function PublicProfilePage({ params }: { params: Promise<{ userId
       </div>
 
       {/* Actions */}
-      <div className="flex gap-3">
+      <div className="flex flex-col sm:flex-row gap-3">
         {isMe ? (
           <Button
             variant="outline"
@@ -161,25 +193,107 @@ export default function PublicProfilePage({ params }: { params: Promise<{ userId
             Edit My Profile
           </Button>
         ) : (
-          <Button
-            variant="primary"
-            size="lg"
-            className="flex-1 hover-lift"
-            leftIcon={<MessageCircle size={18} />}
-            onClick={handleMessage}
-            isLoading={messaging}
-          >
-            Message
-          </Button>
+          <>
+            <Button
+              variant="primary"
+              size="lg"
+              className="flex-1 hover-lift"
+              leftIcon={<MessageCircle size={18} />}
+              onClick={handleMessage}
+              isLoading={messaging}
+              disabled={blocked}
+            >
+              {blocked ? "Blocked" : "Message"}
+            </Button>
+            <Button
+              variant="outline"
+              size="lg"
+              className="sm:w-auto hover-lift"
+              leftIcon={blocked ? <Unlock size={18} /> : <Ban size={18} />}
+              onClick={() => void handleBlock()}
+            >
+              {blocked ? "Unblock" : "Block"}
+            </Button>
+            <Button
+              variant="ghost"
+              size="lg"
+              className="sm:w-auto text-on-surface-variant"
+              leftIcon={<Flag size={18} />}
+              onClick={() => {
+                setReportSent(false);
+                setReportOpen(true);
+              }}
+            >
+              Report
+            </Button>
+          </>
         )}
       </div>
+
+      {/* Block notice */}
+      {blocked && (
+        <div className="p-4 rounded-2xl bg-surface-container-low border border-outline-variant/30 label-md text-on-surface-variant flex items-center gap-2">
+          <Ban size={16} className="shrink-0" />
+          You blocked {firstName}. You won&apos;t see their updates or messages, and they can&apos;t message you.
+        </div>
+      )}
+
+      {/* Report dialog */}
+      {reportOpen && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label="Report user">
+          <div className="w-full max-w-md rounded-3xl bg-surface-container-lowest border border-outline-variant/30 soft-card-shadow p-6 space-y-4">
+            <h3 className="headline-sm font-bold text-on-surface">Report {firstName}</h3>
+            {reportSent ? (
+              <p className="body-md text-on-surface-variant">
+                Thanks — our moderation team will review this. Reports are kept private.
+              </p>
+            ) : (
+              <>
+                <select
+                  value={reportReason}
+                  onChange={(e) => setReportReason(e.target.value)}
+                  className="w-full h-12 px-4 rounded-2xl border border-outline-variant bg-surface-container-lowest text-on-surface body-md outline-none focus:border-primary"
+                  aria-label="Report reason"
+                >
+                  <option value="">Choose a reason…</option>
+                  <option value="Spam or scam">Spam or scam</option>
+                  <option value="Harassment or abuse">Harassment or abuse</option>
+                  <option value="Fake identity">Fake identity</option>
+                  <option value="Inappropriate content">Inappropriate content</option>
+                  <option value="Other">Other</option>
+                </select>
+                <div className="flex gap-2 justify-end pt-2">
+                  <Button variant="ghost" size="md" onClick={() => setReportOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="md"
+                    onClick={() => void handleReport()}
+                    disabled={!reportReason.trim() || reportBusy}
+                    isLoading={reportBusy}
+                  >
+                    Submit report
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Community updates */}
       <section aria-label={`Posts by ${firstName}`}>
         <h3 className="headline-md font-bold text-on-surface mb-3">
           Community updates by {firstName}
         </h3>
-        {posts.length === 0 ? (
+        {blocked ? (
+          <div className="rounded-3xl border border-dashed border-outline-variant/50 bg-surface-container-low/50 p-8 text-center">
+            <p className="body-md text-on-surface-variant">
+              You&apos;ve blocked {firstName}, so their updates are hidden.
+            </p>
+          </div>
+        ) : posts.length === 0 ? (
           <div className="rounded-3xl border border-dashed border-outline-variant/50 bg-surface-container-low/50 p-8 text-center">
             <p className="body-md text-on-surface-variant">
               {firstName} hasn&apos;t shared any updates yet.
